@@ -44,7 +44,7 @@ class Helpers
         'urlAccessToken'          => $tokenUrl,
         'urlResourceOwnerDetails' => '',
         'scopes'                  => $scopes,
-    ]);
+    ]);  
 
     try {
         $newToken = $provider->getAccessToken('refresh_token', [

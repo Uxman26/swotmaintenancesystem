@@ -152,7 +152,7 @@ class ContactsCrudController extends CrudController
             // Ensure the access token is present
             if (isset($xeroTokens['access_token'])) {
                 $xeroAccessToken = $xeroTokens['access_token'];
-               
+                dd($xeroAccessToken);
                 $contactData = [
                     'Contacts' => [
                         [
