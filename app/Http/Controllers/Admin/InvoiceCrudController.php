@@ -8,8 +8,7 @@ use GuzzleHttp\Exception\RequestException;
 use Backpack\CRUD\app\Library\CrudPanel\CrudPanelFacade as CRUD;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-
-
+use App\Helpers\Helpers;
 /**
  * Class InvoiceCrudController
  * @package App\Http\Controllers\Admin
@@ -131,9 +130,9 @@ class InvoiceCrudController extends CrudController
         
         // Check if 'contacts' parameter is present in the session
         $xero = session('xero');
-        if(isset($xero['contacts'])) {
+        if(isset($xero['contacts']) && isset($xero['contacts']['Contacts'])) {
             // Fetch contacts from the session
-            $contactsData = array_column($xero['contacts'], 'Name', 'ContactID');
+            $contactsData = array_column($xero['contacts']['Contacts'], 'Name', 'ContactID');
         } else {
             // If not present, initialize an empty array
             $contactsData = [];
@@ -207,71 +206,227 @@ class InvoiceCrudController extends CrudController
         
     }
     
-    public function store(Request $request)
-    {
-        $xeroTokens = session('xero_tokens');
+    // public function store(Request $request)
+    // {
+    //     $user_id = backpack_user()->id;
         
-        // Ensure the access token is present
-        if (isset($xeroTokens['access_token'])) {
-            $xeroAccessToken = $xeroTokens['access_token'];
+    //     // Refresh token before attempting the API call
+    //     Helpers::refreshAccessToken($user_id);
+    //     $xeroTokens = session('xero_tokens');
+        
+    //     if(empty($xeroTokens)){
+    //         $authRedirectUrl = env('XERO_AUTH_REDIRECT_URL') . '?from=' . url()->current();
+    //         return redirect($authRedirectUrl);
+    //     }
+
+    //     if (isset($xeroTokens['access_token'])) {
+    //         $xeroAccessToken = $xeroTokens['access_token'];
             
-            // Prepare line items array
-            $lineItems = [];
+    //         try {
+    //             $lineItems = [];
+    //             $itemCount = count($request->input('item_description'));
+                
+    //             for ($i = 0; $i < $itemCount; $i++) {
+    //                 $lineItems[] = [
+    //                     'Description' => $request->input('item_description')[$i],
+    //                     'Quantity' => (float)$request->input('item_quantity')[$i], // Cast to float for decimal quantities
+    //                     'UnitAmount' => (float)$request->input('item_price')[$i],
+    //                     'AccountCode' => $request->input('item_account')[$i],
+    //                     'TaxType' => "NONE" // Add tax type as required by Xero
+    //                 ];
+                    
+    //                 // Only add ItemID if it exists (for inventory items)
+    //                 if (!empty($request->input('item_name')[$i])) {
+    //                     $lineItems[$i]['ItemID'] = $request->input('item_name')[$i];
+    //                 }
+    //             }
+                
+    //             $invoiceData = [
+    //                 'Type' => "ACCREC", // Moved from nested array
+    //                 'Contact' => [
+    //                     'ContactID' => $request->input('customer'),
+    //                 ],
+    //                 'LineItems' => $lineItems,
+    //                 'Date' => $request->input('issue_date'),
+    //                 'DueDate' => $request->input('expiry_date'),
+    //                 'Reference' => $request->input('reference'),
+    //                 'Status' => 'DRAFT' // Default to DRAFT for safety
+    //             ];
+                
+    //             // Call the Xero API
+    //             $response = $this->callXeroApi($invoiceData, $xeroAccessToken);
+                
+    //             if (isset($response['Invoices']) && !empty($response['Invoices'])) {
+    //                 // Success - invoice created
+    //                 return redirect()->back()->with('success', 'Invoice created successfully in Xero.');
+    //             } else {
+    //                 // Some error occurred
+    //                 dd($response);
+    //                 return redirect()->back()->with('error', 'Failed to create invoice in Xero. Please try again.');
+    //             }
+                
+    //         } catch (\Exception $e) {
+    //             // Handle exceptions
+    //             dd($e->getMessage());
+    //             return redirect()->back()->with('error', 'Error: ' . $e->getMessage());
+    //         }
+    //     } else {
+    //         return redirect()->back()->with('error', 'No valid Xero token available.');
+    //     }
+    // }
+
+    public function store(Request $request)
+{
+    $user_id = backpack_user()->id;
+    
+    // Refresh token before attempting the API call
+    Helpers::refreshAccessToken($user_id);
+    $xeroTokens = session('xero_tokens');
+    
+    if(empty($xeroTokens)){
+        $authRedirectUrl = env('XERO_AUTH_REDIRECT_URL') . '?from=' . url()->current();
+        return redirect($authRedirectUrl);
+    }
+
+    if (isset($xeroTokens['access_token'])) {
+        $xeroAccessToken = $xeroTokens['access_token'];
+        
+        try {
+            // First save to local database
+            $invoice = new \App\Models\Invoice();
+            $invoice->contact_id = $request->input('customer');
+            $invoice->xero_contact_id = $request->input('xero_contact_id', null);
+            $invoice->date = $request->input('issue_date');
+            $invoice->due_date = $request->input('expiry_date');
+            $invoice->type = 1; // Assuming 1 = ACCREC type in your system
+            $invoice->invoice_number = $this->generateInvoiceNumber();
+            $invoice->reference = $request->input('reference');
+            $invoice->currency_code = $request->input('currency_code', 'USD'); // Default to USD if not provided
+            $invoice->status = 12; // Assuming 12 = DRAFT status in your system
+            
+            // Calculate totals
+            $subtotal = 0;
+            $total_tax = 0;
             $itemCount = count($request->input('item_description'));
             
             for ($i = 0; $i < $itemCount; $i++) {
-                $lineItems[] = [
-                   
-                    'ItemID' => $request->input('item_name')[$i],
-                    'Description' => $request->input('item_description')[$i],
-                    'Quantity' => (int)$request->input('item_quantity')[$i],
-                    'UnitAmount' => (float)$request->input('item_price')[$i],
-                    'AccountCode' => $request->input('item_account')[$i],
-                    "TaxType" => "NONE", // Add tax type if applicable
-                    "LineAmount" => $request->input('item_amount')[$i], // Add line amount if applicable
-                ];
+                $quantity = (float)$request->input('item_quantity')[$i];
+                $unitPrice = (float)$request->input('item_price')[$i];
+                $lineTotal = $quantity * $unitPrice;
+                $subtotal += $lineTotal;
             }
             
+            $invoice->subtotal = $subtotal;
+            $invoice->total_tax = $total_tax;
+            $invoice->total = $subtotal + $total_tax;
+            
+            // Save the invoice
+            $invoice->save();
+            
+            // Build line items for both local DB and Xero API
+            $xeroLineItems = [];
+            for ($i = 0; $i < $itemCount; $i++) {
+                // Save line item to local database
+                $invoiceLine = new \App\Models\InvoiceLine();
+                $invoiceLine->invoice_id = $invoice->id;
+                $invoiceLine->description = $request->input('item_description')[$i];
+                $invoiceLine->quantity = (float)$request->input('item_quantity')[$i];
+                $invoiceLine->unit_price = (float)$request->input('item_price')[$i];
+                $invoiceLine->account_code = $request->input('item_account')[$i];
+                $invoiceLine->item_id = $request->input('item_name')[$i] ?? null;
+                $invoiceLine->line_amount = $invoiceLine->quantity * $invoiceLine->unit_price;
+                $invoiceLine->save();
+                
+                // Build Xero line item
+                $xeroLineItem = [
+                    'Description' => $request->input('item_description')[$i],
+                    'Quantity' => (float)$request->input('item_quantity')[$i],
+                    'UnitAmount' => (float)$request->input('item_price')[$i],
+                    'AccountCode' => $request->input('item_account')[$i],
+                    'TaxType' => "NONE"
+                ];
+                
+                // Only add ItemID if it exists (for inventory items)
+                if (!empty($request->input('item_name')[$i])) {
+                    $xeroLineItem['ItemID'] = $request->input('item_name')[$i];
+                }
+                
+                $xeroLineItems[] = $xeroLineItem;
+            }
+            
+            // Build Xero invoice data
             $invoiceData = [
-                'Invoices' => [
-                    [
-                        "Type" => "ACCREC",
-                        'Contact' => [
-                            'ContactID' => $request->input('customer'),
-                        ],
-                        'LineItems' => $lineItems,
-                        'Date' => $request->input('issue_date'),
-                        'DueDate' => $request->input('expiry_date'),
-                        'Reference' => $request->input('reference'),
-                    ],
+                'Type' => "ACCREC",
+                'Contact' => [
+                    'ContactID' => $request->input('customer'),
                 ],
+                'LineItems' => $xeroLineItems,
+                'Date' => $request->input('issue_date'),
+                'DueDate' => $request->input('expiry_date'),
+                'Reference' => $request->input('reference'),
+                'Status' => 'DRAFT'
             ];
             
             // Call the Xero API
             $response = $this->callXeroApi($invoiceData, $xeroAccessToken);
             
-            if ($response) {
-                // Fetch the latest Xero data
-                $updatedXeroData = $this->getXeroContacts($xeroAccessToken);
+            if (isset($response['Invoices']) && !empty($response['Invoices'])) {
+                // Success - invoice created in Xero
+                // Update local invoice with Xero invoice ID
+                $xeroInvoiceId = $response['Invoices'][0]['InvoiceID'] ?? null;
                 
-                // Update the session with the latest Xero data
-                session(['xero' => $updatedXeroData]);
-                // dd(session('xero'));
+                if ($xeroInvoiceId) {
+                    $invoice->xero_invoice_id = $xeroInvoiceId;
+                    $invoice->save();
+                }
                 
-                // Success message
-                // Redirect to the showquote page with the updated list of quotes
-                return redirect()->route('invoice.showinvoice')->with('success', 'Invoice created successfully in Xero.');
+                return redirect()->back()->with('success', 'Invoice created successfully in both systems.');
             } else {
-                // Error message
-                return redirect()->back()->with('error', 'ailed to create an invoice in Xero.')->withInput();
+                // Xero API failed but local DB succeeded
+                return redirect()->back()->with('warning', 'Invoice saved locally but failed to sync with Xero.');
             }
-        } else {
-            // Error message if Xero access token not found
-            return redirect()->back()->with('error', 'Xero access token not found.')->withInput();
+            
+        } catch (\Exception $e) {
+            // Handle exceptions
+            \Log::error('Invoice creation error', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return redirect()->back()->with('error', 'Error: ' . $e->getMessage());
         }
-           
+    } else {
+        return redirect()->back()->with('error', 'No valid Xero token available.');
+    }
+}
+
+/**
+ * Generate a unique invoice number
+ * 
+ * @return string
+ */
+private function generateInvoiceNumber()
+{
+    // Get the latest invoice number
+    $latestInvoice = \App\Models\Invoice::orderBy('id', 'desc')->first();
+    
+    if (!$latestInvoice) {
+        // No invoices yet, start with INV-0001
+        return 'INV-0001';
     }
     
+    // Get the numeric part of the latest invoice number
+    $latestNumber = $latestInvoice->invoice_number;
+    
+    if (preg_match('/INV-(\d+)/', $latestNumber, $matches)) {
+        $number = (int)$matches[1];
+        $number++;
+        return 'INV-' . str_pad($number, 4, '0', STR_PAD_LEFT);
+    }
+    
+    // Fallback - use timestamp
+    return 'INV-' . date('YmdHis');
+}
     
     
     private function getXeroContacts($xeroAccessToken)
@@ -382,7 +537,7 @@ class InvoiceCrudController extends CrudController
             $Response = $client->request('POST', 'https://api.xero.com/api.xro/2.0/Invoices', [
                 'headers' => [
                     'Authorization' => 'Bearer ' . $xeroAccessToken,
-                    'Xero-Tenant-Id' => '9112b615-0c75-4fdd-b802-553560b6183b',
+                    'Xero-Tenant-Id' => env('XERO_TENANT_ID'),
                     'Accept'        => 'application/json',
                     'Content-Type'  => 'application/json',
                 ],
@@ -476,54 +631,397 @@ class InvoiceCrudController extends CrudController
 
 
 
+// public function syncAllInvoices()
+// {
+//     $xeroTokens = session('xero_tokens');
+
+//     if (!isset($xeroTokens['access_token'])) {
+//         \Alert::error('Xero access token not found.')->flash();
+//         return redirect(backpack_url('invoices'));
+//     }
+
+//     $xeroAccessToken = $xeroTokens['access_token'];
+
+//     // Sync invoices from App to Xero
+//     $localInvoices = \App\Models\Invoice::all();
+//     foreach ($localInvoices as $invoice) {
+//         $invoiceData = [
+//             'Invoices' => [
+//                 [
+//                     'Type' => 'ACCREC',
+//                     'Contact' => [
+//                         'ContactID' => $invoice->customer,
+//                     ],
+//                     'LineItems' => [
+//                         [
+//                             'ItemID' => $invoice->item_id, 
+//                             'Description' => $invoice->description, 
+//                             'Quantity' => $invoice->quantity, 
+//                             'UnitAmount' => $invoice->unit_amount, 
+//                             'AccountCode' => $invoice->account_code,
+//                         ],
+//                     ],
+//                     'Date' => $invoice->issue_date,
+//                     'DueDate' => $invoice->due_date,
+//                     'Reference' => $invoice->reference,
+//                 ],
+//             ],
+//         ];
+
+//         // Call the Xero API to sync each invoice
+//         $this->callXeroApi($invoiceData, $xeroAccessToken);
+//     }
+
+//     // Sync invoices from Xero to App
+//     $updatedXeroData = $this->getXeroContacts($xeroAccessToken);
+//     $this->updateFromXeroApiResponse($updatedXeroData);
+
+//     \Alert::success('All invoices have been synced successfully between App and Xero.')->flash();
+//     return redirect(backpack_url('invoices'));
+// }
+
+/**
+ * Sync invoices between local database and Xero
+ *
+ * @return \Illuminate\Http\RedirectResponse
+ */
 public function syncAllInvoices()
 {
-    $xeroTokens = session('xero_tokens');
-
-    if (!isset($xeroTokens['access_token'])) {
-        \Alert::error('Xero access token not found.')->flash();
+    $user_id = backpack_user()->id;
+    
+    try {
+        // Refresh token before attempting the API call
+        Helpers::refreshAccessToken($user_id);
+        $xeroTokens = session('xero_tokens');
+        
+        if (!isset($xeroTokens['access_token'])) {
+            \Alert::error('Xero access token not found.')->flash();
+            return redirect(backpack_url('invoices'));
+        }
+        
+        $xeroAccessToken = $xeroTokens['access_token'];
+        $tenant_id = session('xero_tenant_id', env('XERO_TENANT_ID'));
+        
+        if (empty($tenant_id)) {
+            \Alert::error('Xero tenant ID not found.')->flash();
+            return redirect(backpack_url('invoices'));
+        }
+        
+        // 1. First, pull invoices from Xero to local DB
+        $this->syncFromXeroToLocal($xeroAccessToken, $tenant_id);
+        
+        // 2. Then, push local invoices to Xero that don't have a Xero ID yet
+        $this->syncFromLocalToXero($xeroAccessToken, $tenant_id);
+        
+        \Alert::success('All invoices have been synced successfully between your app and Xero.')->flash();
+        return redirect(backpack_url('invoices'));
+        
+    } catch (\Exception $e) {
+        \Log::error('Invoice sync error', [
+            'message' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ]);
+        
+        \Alert::error('Error syncing invoices: ' . $e->getMessage())->flash();
         return redirect(backpack_url('invoices'));
     }
-
-    $xeroAccessToken = $xeroTokens['access_token'];
-
-    // Sync invoices from App to Xero
-    $localInvoices = \App\Models\Invoice::all();
-    foreach ($localInvoices as $invoice) {
-        $invoiceData = [
-            'Invoices' => [
-                [
-                    'Type' => 'ACCREC',
-                    'Contact' => [
-                        'ContactID' => $invoice->customer,
-                    ],
-                    'LineItems' => [
-                        [
-                            'ItemID' => $invoice->item_id, 
-                            'Description' => $invoice->description, 
-                            'Quantity' => $invoice->quantity, 
-                            'UnitAmount' => $invoice->unit_amount, 
-                            'AccountCode' => $invoice->account_code,
-                        ],
-                    ],
-                    'Date' => $invoice->issue_date,
-                    'DueDate' => $invoice->due_date,
-                    'Reference' => $invoice->reference,
-                ],
-            ],
-        ];
-
-        // Call the Xero API to sync each invoice
-        $this->callXeroApi($invoiceData, $xeroAccessToken);
-    }
-
-    // Sync invoices from Xero to App
-    $updatedXeroData = $this->getXeroContacts($xeroAccessToken);
-    $this->updateFromXeroApiResponse($updatedXeroData);
-
-    \Alert::success('All invoices have been synced successfully between App and Xero.')->flash();
-    return redirect(backpack_url('invoices'));
 }
 
+/**
+ * Pull invoices from Xero and save them to local database
+ *
+ * @param string $accessToken
+ * @param string $tenantId
+ * @return void
+ */
+private function syncFromXeroToLocal($accessToken, $tenantId)
+{
+    // Get all invoices from Xero
+    $client = new \GuzzleHttp\Client();
+    
+    try {
+        $response = $client->request(
+            'GET',
+            'https://api.xero.com/api.xro/2.0/Invoices',
+            [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $accessToken,
+                    'Xero-tenant-id' => $tenantId,
+                    'Accept' => 'application/json',
+                ],
+                'query' => [
+                    'where' => 'Type=="ACCREC"',  // Only get sales invoices
+                    'order' => 'Date DESC',
+                    'page' => 1
+                ]
+            ]
+        );
+        
+        $responseData = json_decode($response->getBody()->getContents(), true);
+        
+        if (!isset($responseData['Invoices']) || empty($responseData['Invoices'])) {
+            \Log::info('No invoices found in Xero');
+            return;
+        }
+        
+        $syncCount = 0;
+        
+        foreach ($responseData['Invoices'] as $xeroInvoice) {
+            // Check if we already have this invoice in our system
+            $existingInvoice = \App\Models\Invoice::where('xero_invoice_id', $xeroInvoice['InvoiceID'])->first();
+            
+            if ($existingInvoice) {
+                // Update existing invoice
+                $this->updateLocalInvoiceFromXero($existingInvoice, $xeroInvoice);
+            } else {
+                // Create new invoice
+                $this->createLocalInvoiceFromXero($xeroInvoice);
+            }
+            
+            $syncCount++;
+        }
+        
+        \Log::info("Synced $syncCount invoices from Xero to local database");
+        
+    } catch (\Exception $e) {
+        \Log::error('Error pulling invoices from Xero', [
+            'message' => $e->getMessage()
+        ]);
+        throw $e;
+    }
+}
+
+/**
+ * Push local invoices to Xero that don't have a Xero ID
+ *
+ * @param string $accessToken
+ * @param string $tenantId
+ * @return void
+ */
+private function syncFromLocalToXero($accessToken, $tenantId)
+{
+    // Get all invoices that don't have a Xero ID
+    $localInvoices = \App\Models\Invoice::whereNull('xero_invoice_id')
+                        ->orWhere('xero_invoice_id', '')
+                        ->get();
+    
+    if ($localInvoices->isEmpty()) {
+        \Log::info('No local invoices found to sync to Xero');
+        return;
+    }
+    
+    $syncCount = 0;
+    
+    foreach ($localInvoices as $invoice) {
+        try {
+            // Get invoice line items
+            $lineItems = \App\Models\InvoiceLine::where('invoice_id', $invoice->id)->get();
+            
+            if ($lineItems->isEmpty()) {
+                \Log::warning("Invoice #{$invoice->id} has no line items, skipping");
+                continue;
+            }
+            
+            // Format line items for Xero
+            $xeroLineItems = [];
+            foreach ($lineItems as $line) {
+                $lineItem = [
+                    'Description' => $line->description,
+                    'Quantity' => (float)$line->quantity,
+                    'UnitAmount' => (float)$line->unit_price,
+                    'AccountCode' => $line->account_code,
+                    'TaxType' => 'NONE'
+                ];
+                
+                // Only add ItemID if it exists
+                if (!empty($line->item_id)) {
+                    $lineItem['ItemID'] = $line->item_id;
+                }
+                
+                $xeroLineItems[] = $lineItem;
+            }
+            
+            // Build invoice data for Xero
+            $invoiceData = [
+                'Type' => 'ACCREC',
+                'Contact' => [
+                    'ContactID' => $invoice->xero_contact_id ?? $invoice->contact_id
+                ],
+                'LineItems' => $xeroLineItems,
+                'Date' => $invoice->date,
+                'DueDate' => $invoice->due_date,
+                'Reference' => $invoice->reference,
+                'InvoiceNumber' => $invoice->invoice_number,
+                'Status' => $this->mapStatusToXero($invoice->status)
+            ];
+            
+            // Call Xero API to create invoice
+            $client = new \GuzzleHttp\Client();
+            $response = $client->request(
+                'POST',
+                'https://api.xero.com/api.xro/2.0/Invoices',
+                [
+                    'headers' => [
+                        'Authorization' => 'Bearer ' . $accessToken,
+                        'Xero-tenant-id' => $tenantId,
+                        'Accept' => 'application/json',
+                        'Content-Type' => 'application/json',
+                    ],
+                    'json' => $invoiceData
+                ]
+            );
+            
+            $responseData = json_decode($response->getBody()->getContents(), true);
+            
+            if (isset($responseData['Invoices'][0]['InvoiceID'])) {
+                // Update local invoice with Xero ID
+                $invoice->xero_invoice_id = $responseData['Invoices'][0]['InvoiceID'];
+                $invoice->save();
+                $syncCount++;
+            }
+            
+        } catch (\Exception $e) {
+            \Log::error("Error syncing invoice #{$invoice->id} to Xero", [
+                'message' => $e->getMessage()
+            ]);
+            // Continue with next invoice
+        }
+    }
+    
+    \Log::info("Synced $syncCount invoices from local database to Xero");
+}
+
+/**
+ * Update existing local invoice with data from Xero
+ *
+ * @param \App\Models\Invoice $localInvoice
+ * @param array $xeroInvoice
+ * @return void
+ */
+private function updateLocalInvoiceFromXero($localInvoice, $xeroInvoice)
+{
+    // Update basic invoice details
+    $localInvoice->xero_invoice_id = $xeroInvoice['InvoiceID'];
+    $localInvoice->invoice_number = $xeroInvoice['InvoiceNumber'];
+    $localInvoice->xero_contact_id = $xeroInvoice['Contact']['ContactID'];
+    $localInvoice->date = $xeroInvoice['Date'];
+    $localInvoice->due_date = $xeroInvoice['DueDate'];
+    $localInvoice->reference = $xeroInvoice['Reference'] ?? null;
+    $localInvoice->status = $this->mapXeroStatus($xeroInvoice['Status']);
+    $localInvoice->subtotal = $xeroInvoice['SubTotal'];
+    $localInvoice->total_tax = $xeroInvoice['TotalTax'];
+    $localInvoice->total = $xeroInvoice['Total'];
+    $localInvoice->currency_code = $xeroInvoice['CurrencyCode'];
+    
+    // Save the invoice
+    $localInvoice->save();
+    
+    // Delete existing line items and recreate them
+    \App\Models\InvoiceLine::where('invoice_id', $localInvoice->id)->delete();
+    
+    // Create new line items from Xero data
+    if (isset($xeroInvoice['LineItems']) && !empty($xeroInvoice['LineItems'])) {
+        foreach ($xeroInvoice['LineItems'] as $xeroLineItem) {
+            $lineItem = new \App\Models\InvoiceLine();
+            $lineItem->invoice_id = $localInvoice->id;
+            $lineItem->description = $xeroLineItem['Description'];
+            $lineItem->quantity = $xeroLineItem['Quantity'];
+            $lineItem->unit_price = $xeroLineItem['UnitAmount'];
+            $lineItem->line_amount = $xeroLineItem['LineAmount'];
+            $lineItem->account_code = $xeroLineItem['AccountCode'] ?? null;
+            $lineItem->item_id = $xeroLineItem['ItemID'] ?? null;
+            $lineItem->save();
+        }
+    }
+}
+
+/**
+ * Create a new local invoice from Xero data
+ *
+ * @param array $xeroInvoice
+ * @return void
+ */
+private function createLocalInvoiceFromXero($xeroInvoice)
+{
+    // Create a new invoice
+    $invoice = new \App\Models\Invoice();
+    $invoice->xero_invoice_id = $xeroInvoice['InvoiceID'];
+    $invoice->invoice_number = $xeroInvoice['InvoiceNumber'];
+    $invoice->xero_contact_id = $xeroInvoice['Contact']['ContactID'];
+    
+    // Try to match the Xero contact with a local contact
+    $contact = \App\Models\Contact::where('xero_contact_id', $xeroInvoice['Contact']['ContactID'])->first();
+    if ($contact) {
+        $invoice->contact_id = $contact->id;
+    }
+    
+    $invoice->date = $xeroInvoice['Date'];
+    $invoice->due_date = $xeroInvoice['DueDate'];
+    $invoice->reference = $xeroInvoice['Reference'] ?? null;
+    $invoice->status = $this->mapXeroStatus($xeroInvoice['Status']);
+    $invoice->type = 1; // ACCREC type
+    $invoice->subtotal = $xeroInvoice['SubTotal'];
+    $invoice->total_tax = $xeroInvoice['TotalTax'];
+    $invoice->total = $xeroInvoice['Total'];
+    $invoice->currency_code = $xeroInvoice['CurrencyCode'];
+    
+    // Save the invoice
+    $invoice->save();
+    
+    // Create line items
+    if (isset($xeroInvoice['LineItems']) && !empty($xeroInvoice['LineItems'])) {
+        foreach ($xeroInvoice['LineItems'] as $xeroLineItem) {
+            $lineItem = new \App\Models\InvoiceLine();
+            $lineItem->invoice_id = $invoice->id;
+            $lineItem->description = $xeroLineItem['Description'];
+            $lineItem->quantity = $xeroLineItem['Quantity'];
+            $lineItem->unit_price = $xeroLineItem['UnitAmount'];
+            $lineItem->line_amount = $xeroLineItem['LineAmount'];
+            $lineItem->account_code = $xeroLineItem['AccountCode'] ?? null;
+            $lineItem->item_id = $xeroLineItem['ItemID'] ?? null;
+            $lineItem->save();
+        }
+    }
+}
+
+/**
+ * Map Xero status to local status code
+ *
+ * @param string $xeroStatus
+ * @return int
+ */
+private function mapXeroStatus($xeroStatus)
+{
+    $statusMap = [
+        'DRAFT' => 12,
+        'SUBMITTED' => 13,
+        'AUTHORISED' => 14,
+        'PAID' => 15,
+        'VOIDED' => 16,
+        'DELETED' => 17,
+    ];
+    
+    return $statusMap[$xeroStatus] ?? 12; // Default to DRAFT
+}
+
+/**
+ * Map local status code to Xero status
+ *
+ * @param int $localStatus
+ * @return string
+ */
+private function mapStatusToXero($localStatus)
+{
+    $statusMap = [
+        12 => 'DRAFT',
+        13 => 'SUBMITTED',
+        14 => 'AUTHORISED',
+        15 => 'PAID',
+        16 => 'VOIDED',
+        17 => 'DELETED',
+    ];
+    
+    return $statusMap[$localStatus] ?? 'DRAFT'; // Default to DRAFT
+}
         
 }

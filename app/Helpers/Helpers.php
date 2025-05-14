@@ -19,7 +19,6 @@ class Helpers
     $scopes = $config['scopes'];
     $authUrl = $config['auth_url'];
     $tokenUrl = $config['token_url'];
-
     Log::info("Getting refresh token for user: " . $id);
 
     $user = XeroToken::where('user_id', $id)->first();
@@ -29,7 +28,6 @@ class Helpers
     }
 
     $currentRefreshToken = $user->refresh_token;
-
     if (!$currentRefreshToken) {
         throw new \Exception('Refresh token not found for the user.');
     }
@@ -84,7 +82,6 @@ class Helpers
 
         // Optional: redirect user to re-auth if refresh fails
         session()->forget('xero_tokens');
-
         throw new \Exception('Failed to refresh Xero access token. Please re-authenticate.');
     }
 }

@@ -152,7 +152,6 @@ class ContactsCrudController extends CrudController
             // Ensure the access token is present
             if (isset($xeroTokens['access_token'])) {
                 $xeroAccessToken = $xeroTokens['access_token'];
-                dd($xeroAccessToken);
                 $contactData = [
                     'Contacts' => [
                         [
@@ -167,6 +166,7 @@ class ContactsCrudController extends CrudController
                 ];
                 
                 // Call the Xero API
+                dd($xeroAccessToken);
                 $response = $this->callXeroApi($contactData, $xeroAccessToken);
                 
                 
@@ -390,7 +390,6 @@ class ContactsCrudController extends CrudController
             $xeroAccessToken = $xeroTokens['access_token'];
             $contactID = $request->input('contact_id');
             
-            
             $contactData = [
                 'Contacts' => [
                     [
@@ -483,18 +482,13 @@ class ContactsCrudController extends CrudController
         
         if($existingQuote){
             // Update quotes table
-            DB::table('xerocontacts')->update([               
-                'name'              => $Name,
-                'first_name'        => $firstName,
-                'last_name'         => $lastName,
-                'email_address'     => $email,
-                'updated_at'       => now(),
+            DB::table('xerocontacts')->where('contact_id', $contactID)->update([
+                'name'            => $Name,
+                'first_name'      => $firstName,
+                'last_name'       => $lastName,
+                'email_address'   => $email,
+                'updated_at'      => now(),
             ]);
-            
-            
-            
-            
-            
         }
         
     }
@@ -520,7 +514,7 @@ class ContactsCrudController extends CrudController
     // Delete from Xero (Archive)
     $deletedFromXero = $this->deleteXeroContact($xeroAccessToken, $contactID);
 
-    if ($deletedFromXero) {
+    // if ($deletedFromXero) {
         // Delete from DB
         DB::table('xerocontacts')->where('id', $id)->delete();
 
@@ -528,7 +522,7 @@ class ContactsCrudController extends CrudController
         return redirect(backpack_url('contacts'));
 
 
-    }
+    // }
 
     \Alert::error('Failed to delete contact from Xero.')->flash();
     return redirect(backpack_url('contacts'));
@@ -735,8 +729,6 @@ public function syncFromXeroToApp()
 
 public function syncContactWithXero($id) 
 {
-    
-    dd(env('XERO_CLIENT_ID'), env('XERO_CLIENT_SECRET'));
     $user_id = backpack_user()->id;
     Helpers::refreshAccessToken($user_id);
 

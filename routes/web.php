@@ -38,7 +38,6 @@ Route::get('/', function () {
         
         Route::post('/contact-us', [ContactController::class, 'contact'])->name('pages.contact');
         
-    });
 
         Route::get('/allquote', [QuoteCRUDController::class, 'showquote'])->name('quote.showquote');
         
@@ -70,6 +69,7 @@ Route::get('/', function () {
             Route::post('/logout', [App\Http\Controllers\Auth\LoginController::class, 'logout'])->name('logout');
 
 
+    });
             Route::middleware(array_merge(
                 (array) config('backpack.base.web_middleware', 'web')
             ))->group(function () {

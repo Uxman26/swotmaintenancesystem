@@ -316,7 +316,7 @@ class QuoteCrudController extends CrudController
        //dd($xero);
         
         // Check if 'contacts' and 'items' keys exist in the session data
-       if (empty($xero['contacts'])) {
+        if (empty($xero['contacts'])) {
            \Log::error('No contacts found in Xero data.');
             $authRedirectUrl = env('XERO_AUTH_REDIRECT_URL') . '?from=' . url()->current();
             header('Location: ' . $authRedirectUrl);
